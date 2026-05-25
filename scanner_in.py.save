@@ -1,0 +1,87 @@
+d
+
+def analyze_momentum_burst_india(ticker):
+    try:
+        # Append .NS for National Stock Exchange
+        yf_ticker = f"{ticker}.NS"
+        stock = yf.Ticker(yf_ticker)
+        
+        # --- THE INDIAN GATEKEEPER ---
+               # 1. Price Filter: ₹100 and above
+        if info.last_price < 100:
+            return None
+            
+        # 2. Market Cap Filter: ₹1,000 Crores and above 
+        # (fast_info.market_cap is in absolute currency, so 10 Billion INR)
+        if info.market_cap < 10_000_000_000:
+            return None
+            
+        # 3. Volume Filter: 200,000 shares and above
+        if info.last_volume < 200_000:
+            return None
+        # -----------------------------
+
+        df = stock.history(period="90d")
+        if len(df) < 50:
+            return None 
+            
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        df['SMA_50'] = df['Close'].rolling(window=50).mean()
+        current_close = df['Close'].iloc[-1]
+        
+        if not (current_close > df['SMA_20'].iloc[-1] and df['SMA_20'].iloc[-1] > df['SMA_50'].iloc[-1]):
+            return None
+
+        last_3_days = df.iloc[-3:]
+        consolidation_high = last_3_days['High'].max()
+        consolidation_low = last_3_days['Low'].min()
+        consolidation_range_pct = (consolidation_high - consolidation_low) / consolidation_low
+        
+        if consolidation_range_pct > 0.08: 
+            return None
+            
+        if all(last_3_days['Close'].iloc[i] > last_3_days['Open'].iloc[i] for i in range(3)):
+            return None
+            
+        prior_day = df.iloc[-1]
+        prior_range_pct = (prior_day['High'] - prior_day['Low']) / prior_day['Close']
+        
+        if prior_range_pct > 0.025:
+            return None
+
+        risk_level = prior_day['Low'] 
+        
+        return {
+            "Ticker": ticker,
+            "Live Price": round(current_close, 2),
+            "Breakout Trigger (+4%)": round(prior_day['Close'] * 1.04, 2),
+            "Suggested Stop Loss": round(risk_level, 2)
+        }
+    except:
+        return None
+
+if __name__ == "__main__":
+    print("Starting Indian Market Pre-Market Scan...")
+    
+    # Your focused operational universe
+    nse_universe = [
+        "HAL", "BEL", "ZEN", "GENUS", "SENCO", "ZOMATO", "SUZLON", "JIOFIN", 
+        "TATAMOTORS", "RELIANCE", "IRFC", "BHEL", "PFC", "RECL", "TATASTEEL", 
+        "HUDCO", "IREDA", "NHPC", "SJVN", "MAHSEAMLES", "KALYANKJIL", "DATAPATNER"
+    ]
+    
+    watchlist = []
+    total = len(nse_universe)
+    
+    for i, ticker in enumerate(nse_universe, 1):
+        print(f"Scanning NSE: {ticker} ({i}/{total})...")
+        result = analyze_momentum_burst_india(ticker)
+        if result:
+            watchlist.append(result)
+            
+    df_watchlist = pd.DataFrame(watchlist)
+    if not df_watchlist.empty:
+        df_watchlist.to_csv("active_watchlist_in.csv", index=False)
+        print(f"\nScan Complete! Found {len(watchlist)} Indian setups.")
+    else:
+        pd.DataFrame(columns=["Ticker", "Live Price", "Breakout Trigger (+4%)", "Suggested Stop Loss"]).to_csv("active_wat
