@@ -99,7 +99,9 @@ def run_bot():
                         spread_pct = ((trigger_price - live_price) / live_price) * 100
                         
                         # Store as a tuple: (mathematical_value, formatted_string)
-                        active_spreads.append((spread_pct, f"• *{ticker}* | Live: ${live_price:.2f} | Tgt: ${trigger_price:.2f} | Spread: {spread_pct:.2f}%"))
+                        # The fixed widths (<8, <7) guarantee perfect table alignment
+                        row_str = f"{ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
+                        active_spreads.append((spread_pct, row_str))
 
                 except Exception as e:
                     print(f"Error checking {ticker}: {e}")
@@ -114,7 +116,14 @@ def run_bot():
                     # Extract just the text strings for the payload
                     sorted_text_lines = [item[1] for item in active_spreads]
                     
-                    summary_msg = "📊 *30-MINUTE SPREAD REPORT*\n\n" + "\n".join(sorted_text_lines)
+                    # Assemble the tabular payload inside a monospace code block
+                    summary_msg = "🦅 *30-MINUTE MB RADAR* (Closest to Trigger) 🦅\n\n"
+                    summary_msg += "```text\n"
+                    summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
+                    summary_msg += "-" * 37 + "\n"
+                    summary_msg += "\n".join(sorted_text_lines)
+                    summary_msg += "\n```"
+                    
                     send_telegram_alert(summary_msg)
                 
                 last_summary_time = current_time
