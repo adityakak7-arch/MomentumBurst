@@ -14,13 +14,11 @@ def home():
     return "🦅 MomentumBurst Cloud Engine is LIVE and scanning."
 
 # --- 2. CREDENTIALS & INITIALIZATION ---
-# These pull securely from Render's Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Initialize Supabase Database
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
@@ -30,7 +28,7 @@ else:
 # --- 3. TELEGRAM ALERT FUNCTION ---
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"Mock Alert (Keys Missing): {message}")
+        print(f"Mock Alert (Keys Missing): \n{message}")
         return
     
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -48,6 +46,9 @@ def send_telegram_alert(message):
 def run_bot():
     print("🦅 Cloud Telegram Engine Active. Scanning...")
     
+    # Set to 0 so the first summary fires immediately on boot
+    last_summary_time = 0 
+    
     while True:
         try:
             if not supabase:
@@ -58,6 +59,8 @@ def run_bot():
             response = supabase.table("watchlists").select("*").execute()
             targets = response.data
 
+            active_spreads = []
+
             for target in targets:
                 ticker = target.get("ticker")
                 trigger_price = float(target.get("trigger_price", 0))
@@ -66,8 +69,8 @@ def run_bot():
                 if not ticker or not trigger_price:
                     continue
 
-                # Fetch live price from Yahoo Finance
                 try:
+                    # Fetch live price from Yahoo Finance
                     ticker_data = yf.Ticker(ticker)
                     todays_data = ticker_data.history(period='1d')
                     
@@ -76,7 +79,7 @@ def run_bot():
                     
                     live_price = float(todays_data['Close'].iloc[-1])
                     
-                    # 🚨 TRIGGER LOGIC 🚨
+                    # 🚨 1. BREAKOUT TRIGGER LOGIC 🚨
                     if live_price >= trigger_price:
                         alert_msg = (
                             f"🚨 *BREAKOUT TRIGGERED*\n\n"
@@ -90,22 +93,44 @@ def run_bot():
                         
                         # Delete the row so it doesn't spam you every 60 seconds
                         supabase.table("watchlists").delete().eq("id", target.get("id")).execute()
+                    
+                    # 📊 2. SPREAD TRACKING LOGIC (For targets not yet triggered) 📊
+                    else:
+                        spread_pct = ((trigger_price - live_price) / live_price) * 100
                         
+                        # Store as a tuple: (mathematical_value, formatted_string)
+                        active_spreads.append((spread_pct, f"• *{ticker}* | Live: ${live_price:.2f} | Tgt: ${trigger_price:.2f} | Spread: {spread_pct:.2f}%"))
+
                 except Exception as e:
                     print(f"Error checking {ticker}: {e}")
+
+            # 🕒 3. HALF-HOURLY SPREAD REPORT 🕒
+            current_time = time.time()
+            if current_time - last_summary_time >= 1800:  # 1800 seconds = 30 minutes
+                if active_spreads:
+                    # Sort ascending based on the numerical spread percentage
+                    active_spreads.sort(key=lambda x: x[0])
+                    
+                    # Extract just the text strings for the payload
+                    sorted_text_lines = [item[1] for item in active_spreads]
+                    
+                    summary_msg = "📊 *30-MINUTE SPREAD REPORT*\n\n" + "\n".join(sorted_text_lines)
+                    send_telegram_alert(summary_msg)
+                
+                last_summary_time = current_time
 
         except Exception as e:
             print(f"Scanner Loop Error: {e}")
         
-        # Rest for 60 seconds before scanning again
+        # Rest for 60 seconds before scanning the actual prices again
         time.sleep(60)
 
 # --- 5. EXECUTION ---
-# 1. Start the scanning engine in the background IMMEDIATELY (Gunicorn will read this)
+# 1. Start the scanning engine IMMEDIATELY (Crucial for Gunicorn/Render)
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
 if __name__ == '__main__':
-    # 2. Start the dummy web server (For local testing only, Render uses Gunicorn)
+    # 2. Start the dummy web server (Used for local testing, Render uses Gunicorn)
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
