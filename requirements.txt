@@ -1,5 +1,6 @@
-streamlit
-pandas
-yfinance
+flask
+gunicorn
 supabase
+yfinance
 requests
+python-dotenv
