@@ -101,11 +101,11 @@ def run_bot():
         time.sleep(60)
 
 # --- 5. EXECUTION ---
+# 1. Start the scanning engine in the background IMMEDIATELY (Gunicorn will read this)
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
 if __name__ == '__main__':
-    # 1. Start the scanning engine in the background
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # 2. Start the dummy web server to keep Render Free Tier happy
+    # 2. Start the dummy web server (For local testing only, Render uses Gunicorn)
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
