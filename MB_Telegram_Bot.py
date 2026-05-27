@@ -2,8 +2,6 @@ import os
 import time
 import threading
 import requests
-import re
-import urllib.parse
 from supabase import create_client, Client
 from flask import Flask
 
@@ -12,7 +10,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🦅 MomentumBurst Cloud Engine is LIVE and scanning."
+    return "🦅 MomentumBurst Cloud Engine is LIVE and scanning via TradingView."
 
 # --- 2. CREDENTIALS & INITIALIZATION ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -45,41 +43,66 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram Request Error: {e}")
 
-# --- 4. THE MULTI-NODE SCRAPER (Bypasses Cloudflare & IP Bans) ---
-def fetch_price_stealth(ticker):
+# --- 4. THE TRADINGVIEW ENGINE (Bypasses Yahoo IP Bans) ---
+# Global cache maps raw tickers to exact TV exchanges (e.g., "PAGEIND" -> "NSE:PAGEIND")
+tv_cache = {}
+
+def fetch_price_tv(ticker, market):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
     
-    # Strategy A: Yahoo V7 Spark API (Undocumented, lower security)
-    try:
-        url = f"https://query1.finance.yahoo.com/v7/finance/spark?symbols={ticker}&range=1d&interval=1m"
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            price = data.get("spark", {}).get("result", [{}])[0].get("response", [{}])[0].get("meta", {}).get("regularMarketPrice")
-            if price: return float(price)
-    except Exception:
-        pass
+    # Map database market string to TV country code for accurate search resolution
+    country = ""
+    if market and "india" in market.lower():
+        country = "IN"
+    elif market and "us" in market.lower():
+        country = "US"
 
-    # Strategy B: Route through AllOrigins Proxy (Bypasses Render IP Ban entirely)
-    try:
-        target_url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
-        proxy_url = f"https://api.allorigins.win/raw?url={urllib.parse.quote(target_url)}"
-        res = requests.get(proxy_url, timeout=7)
-        if res.status_code == 200:
+    # 1. Resolve Exact Exchange (Hit once per stock, then cached)
+    if ticker not in tv_cache:
+        search_url = f"https://symbol-search.tradingview.com/symbol_search/v3/?text={ticker}&hl=1&type=stock"
+        if country:
+            search_url += f"&country={country}"
+        
+        try:
+            res = requests.get(search_url, headers=headers, timeout=5)
             data = res.json()
-            meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
-            price = meta.get("regularMarketPrice")
-            if price: return float(price)
-    except Exception:
-        pass
+            if isinstance(data, list) and len(data) > 0:
+                exchange = data[0].get("exchange")
+                symbol = data[0].get("symbol")
+                tv_cache[ticker] = f"{exchange}:{symbol}"
+            else:
+                return None
+        except Exception as e:
+            print(f"TV Search Error for {ticker}: {e}")
+            return None
+            
+    full_tv_ticker = tv_cache.get(ticker)
+    if not full_tv_ticker:
+        return None
+
+    # 2. Fetch Live Price via Global Scanner
+    scan_url = "https://scanner.tradingview.com/global/scan"
+    payload = {
+        "symbols": {"tickers": [full_tv_ticker]},
+        "columns": ["close"]
+    }
+    try:
+        res = requests.post(scan_url, headers=headers, json=payload, timeout=5)
+        data = res.json()
+        if data.get("data") and len(data["data"]) > 0:
+            price_array = data["data"][0].get("d", [])
+            if price_array and len(price_array) > 0:
+                return float(price_array[0])
+    except Exception as e:
+        print(f"TV Scan Error for {ticker}: {e}")
         
     return None
 
 # --- 5. THE CORE SCANNER ENGINE ---
 def run_bot():
-    print("🦅 Cloud Telegram Engine Active. Scanning via Multi-Node Proxy...")
+    print("🦅 Cloud Telegram Engine Active. Scanning via TradingView Protocol...")
     
     last_summary_time = 0 
     
@@ -101,12 +124,8 @@ def run_bot():
                 if not original_ticker or not trigger_price:
                     continue
 
-                # 🥷 1. Attempt primary fetch
-                live_price = fetch_price_stealth(original_ticker)
-                
-                # 🥷 2. Dynamic Auto-Correction for Indian Stocks
-                if live_price is None and not original_ticker.endswith(".NS") and not original_ticker.endswith(".BO"):
-                    live_price = fetch_price_stealth(f"{original_ticker}.NS")
+                # 🥷 Fetch using TradingView Engine
+                live_price = fetch_price_tv(original_ticker, market)
                 
                 if live_price is None:
                     print(f"Could not extract price for {original_ticker}")
