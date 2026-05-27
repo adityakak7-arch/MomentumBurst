@@ -42,31 +42,43 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram API Error: {e}")
 
-# --- 4. GHOST SCRAPER (Bypasses yfinance API rate limits) ---
+# --- 4. THE SHADOW SCRAPER (Bypasses Cloudflare HTML Shields) ---
 def fetch_price_stealth(ticker):
-    url = f"https://finance.yahoo.com/quote/{ticker}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "application/json"
     }
+    
+    # Strategy A: Silent ping to Yahoo's raw data backend
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        api_url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
+        res = requests.get(api_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            if price: return float(price)
+    except Exception:
+        pass
+
+    # Strategy B: Deep regex on embedded HTML JSON payloads
+    try:
+        html_url = f"https://finance.yahoo.com/quote/{ticker}"
+        res = requests.get(html_url, headers=headers, timeout=5)
         
-        # Regex to violently extract the price from Yahoo's HTML fin-streamer tags
-        pattern = f'data-symbol="{ticker}"[^>]*data-field="regularMarketPrice"[^>]*value="([^"]+)"'
-        match = re.search(pattern, res.text)
+        match = re.search(r'"currentPrice"\s*:\s*\{"raw"\s*:\s*([\d\.]+)', res.text)
+        if match: return float(match.group(1))
         
-        if match:
-            return float(match.group(1))
-        return None
-    except Exception as e:
-        print(f"Scraper error on {ticker}: {e}")
-        return None
+        match2 = re.search(f'data-symbol="{ticker}"[^>]*data-field="regularMarketPrice"[^>]*value="([^"]+)"', res.text, re.IGNORECASE)
+        if match2: return float(match2.group(1))
+    except Exception:
+        pass
+        
+    return None
 
 # --- 5. THE CORE SCANNER ENGINE ---
 def run_bot():
-    print("🦅 Cloud Telegram Engine Active. Scanning via Ghost Scraper...")
+    print("🦅 Cloud Telegram Engine Active. Scanning via Shadow Protocol...")
     
     last_summary_time = 0 
     
@@ -81,18 +93,23 @@ def run_bot():
             active_spreads = []
 
             for target in targets:
-                ticker = target.get("ticker")
+                original_ticker = target.get("ticker", "").strip().upper()
                 trigger_price = float(target.get("trigger_price", 0))
                 market = target.get("market", "Unknown")
                 
-                if not ticker or not trigger_price:
+                if not original_ticker or not trigger_price:
                     continue
 
-                # 🥷 Fetch using the new HTML scraper
-                live_price = fetch_price_stealth(ticker)
+                # Auto-correct Indian tickers for Yahoo Finance backend
+                fetch_ticker = original_ticker
+                if market.lower() == "india" and not fetch_ticker.endswith(".NS") and not fetch_ticker.endswith(".BO"):
+                    fetch_ticker += ".NS"
+
+                # 🥷 Fetch using the shadow scraper
+                live_price = fetch_price_stealth(fetch_ticker)
                 
                 if live_price is None:
-                    print(f"Could not extract price for {ticker}")
+                    print(f"Could not extract price for {original_ticker}")
                     time.sleep(1)
                     continue
                 
@@ -100,23 +117,23 @@ def run_bot():
                 if live_price >= trigger_price:
                     alert_msg = (
                         f"🚨 *BREAKOUT TRIGGERED*\n\n"
-                        f"🎯 *Ticker:* {ticker}\n"
+                        f"🎯 *Ticker:* {original_ticker}\n"
                         f"🔥 *Live Price:* ${live_price:.2f}\n"
                         f"📈 *Trigger Level:* ${trigger_price:.2f}\n"
                         f"📊 *Market:* {market}"
                     )
                     send_telegram_alert(alert_msg)
-                    print(f"Triggered: {ticker} at {live_price}")
+                    print(f"Triggered: {original_ticker} at {live_price}")
                     
                     supabase.table("watchlists").delete().eq("id", target.get("id")).execute()
                 
                 # 📊 SPREAD TRACKING LOGIC
                 else:
                     spread_pct = ((trigger_price - live_price) / live_price) * 100
-                    row_str = f"{ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
+                    row_str = f"{original_ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
                     active_spreads.append((spread_pct, row_str))
 
-                # Polite 1-second breather so we don't get HTML banned
+                # Polite 1-second breather
                 time.sleep(1)
 
             # 🕒 HALF-HOURLY SPREAD REPORT
