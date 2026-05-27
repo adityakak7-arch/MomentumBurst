@@ -43,64 +43,54 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram Request Error: {e}")
 
-# --- 4. THE TRADINGVIEW ENGINE (Bypasses IP Bans) ---
+# --- 4. THE TRADINGVIEW ENGINE (Brute-Force Scanner) ---
 tv_cache = {}
 
 def fetch_price_tv(ticker, market):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Content-Type": "application/json"
     }
     
-    country = ""
-    if market and "india" in market.lower():
-        country = "IN"
-    elif market and "us" in market.lower():
-        country = "US"
+    # 1. Determine which exchanges to brute-force based on the target market
+    if ticker in tv_cache:
+        # If we already figured it out on a previous loop, use the cached exchange
+        exchanges_to_try = [tv_cache[ticker]]
+    elif market and "india" in market.lower():
+        exchanges_to_try = ["NSE", "BSE"]
+    else:
+        # Default to US markets
+        exchanges_to_try = ["NASDAQ", "NYSE", "AMEX"]
 
-    # 1. Resolve Exact Exchange
-    if ticker not in tv_cache:
-        search_url = f"https://symbol-search.tradingview.com/symbol_search/v3/?text={ticker}&hl=1&type=stock"
-        if country:
-            search_url += f"&country={country}"
+    scan_url = "https://scanner.tradingview.com/global/scan"
+    
+    # 2. Fire directly at the Scanner API, bypassing the Search API entirely
+    for exchange in exchanges_to_try:
+        full_tv_ticker = f"{exchange}:{ticker}"
+        payload = {
+            "symbols": {"tickers": [full_tv_ticker]},
+            "columns": ["close"]
+        }
         
         try:
-            res = requests.get(search_url, headers=headers, timeout=5)
-            data = res.json()
-            if isinstance(data, list) and len(data) > 0:
-                exchange = data[0].get("exchange")
-                symbol = data[0].get("symbol")
-                tv_cache[ticker] = f"{exchange}:{symbol}"
-            else:
-                return None
-        except Exception as e:
-            print(f"TV Search Error for {ticker}: {e}")
-            return None
+            res = requests.post(scan_url, headers=headers, json=payload, timeout=5)
             
-    full_tv_ticker = tv_cache.get(ticker)
-    if not full_tv_ticker:
-        return None
-
-    # 2. Fetch Live Price
-    scan_url = "https://scanner.tradingview.com/global/scan"
-    payload = {
-        "symbols": {"tickers": [full_tv_ticker]},
-        "columns": ["close"]
-    }
-    try:
-        res = requests.post(scan_url, headers=headers, json=payload, timeout=5)
-        data = res.json()
-        if data.get("data") and len(data["data"]) > 0:
-            price_array = data["data"][0].get("d", [])
-            if price_array and len(price_array) > 0:
-                return float(price_array[0])
-    except Exception as e:
-        print(f"TV Scan Error for {ticker}: {e}")
-        
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("data") and len(data["data"]) > 0:
+                    price_array = data["data"][0].get("d", [])
+                    if price_array and len(price_array) > 0:
+                        # Success! Cache the exchange so we skip the guessing next time
+                        tv_cache[ticker] = exchange
+                        return float(price_array[0])
+        except Exception as e:
+            pass # Silently fail and try the next exchange prefix
+            
     return None
 
 # --- 5. THE CORE SCANNER ENGINE ---
 def run_bot():
-    print("🦅 Cloud Telegram Engine Active. Scanning via TradingView Protocol...")
+    print("🦅 Cloud Telegram Engine Active. Scanning via Brute-Force TV Protocol...")
     
     last_summary_time = 0 
     
@@ -149,16 +139,16 @@ def run_bot():
                     row_str = f"{original_ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
                     active_spreads.append((spread_pct, row_str))
 
+                # Polite 1-second breather to keep the Scanner API happy
                 time.sleep(1)
 
-            # 🕒 HALF-HOURLY SPREAD REPORT (Chunked for Payload Limits)
+            # 🕒 HALF-HOURLY SPREAD REPORT (Chunked for Telegram Limits)
             current_time = time.time()
             if current_time - last_summary_time >= 1800:
                 if active_spreads:
                     active_spreads.sort(key=lambda x: x[0])
                     sorted_text_lines = [item[1] for item in active_spreads]
                     
-                    # Telegram limit is 4096 chars. Slice the array into chunks of 40 stocks.
                     chunk_size = 40
                     for i in range(0, len(sorted_text_lines), chunk_size):
                         chunk = sorted_text_lines[i:i + chunk_size]
@@ -171,8 +161,6 @@ def run_bot():
                         summary_msg += "\n</pre>"
                         
                         send_telegram_alert(summary_msg)
-                        
-                        # Polite 1-second delay so Telegram doesn't flag us for spamming messages
                         time.sleep(1)
                 
                 last_summary_time = current_time
