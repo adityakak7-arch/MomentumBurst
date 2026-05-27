@@ -1,4 +1,4 @@
-kimport os
+import os
 import time
 import threading
 import requests
