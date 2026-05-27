@@ -2,7 +2,7 @@ import os
 import time
 import threading
 import requests
-import yfinance as yf
+import re
 from supabase import create_client, Client
 from flask import Flask
 
@@ -28,7 +28,7 @@ else:
 # --- 3. TELEGRAM ALERT FUNCTION ---
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"Mock Alert (Keys Missing): \n{message}")
+        print(f"Mock Alert: \n{message}")
         return
     
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -42,17 +42,32 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram API Error: {e}")
 
-# --- 4. THE CORE SCANNER ENGINE ---
-# 🥷 STEALTH PROTOCOL: Trick Yahoo Finance into thinking this server is a Mac browser
-yf_session = requests.Session()
-yf_session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-})
+# --- 4. GHOST SCRAPER (Bypasses yfinance API rate limits) ---
+def fetch_price_stealth(ticker):
+    url = f"https://finance.yahoo.com/quote/{ticker}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        
+        # Regex to violently extract the price from Yahoo's HTML fin-streamer tags
+        pattern = f'data-symbol="{ticker}"[^>]*data-field="regularMarketPrice"[^>]*value="([^"]+)"'
+        match = re.search(pattern, res.text)
+        
+        if match:
+            return float(match.group(1))
+        return None
+    except Exception as e:
+        print(f"Scraper error on {ticker}: {e}")
+        return None
 
+# --- 5. THE CORE SCANNER ENGINE ---
 def run_bot():
-    print("🦅 Cloud Telegram Engine Active. Scanning...")
+    print("🦅 Cloud Telegram Engine Active. Scanning via Ghost Scraper...")
     
-    # Set to 0 so the first summary fires immediately on boot
     last_summary_time = 0 
     
     while True:
@@ -61,10 +76,8 @@ def run_bot():
                 time.sleep(60)
                 continue
 
-            # Fetch all active targets from the watchlists table
             response = supabase.table("watchlists").select("*").execute()
             targets = response.data
-
             active_spreads = []
 
             for target in targets:
@@ -75,56 +88,44 @@ def run_bot():
                 if not ticker or not trigger_price:
                     continue
 
-                try:
-                    # Fetch live price using the stealth session
-                    ticker_data = yf.Ticker(ticker, session=yf_session)
-                    todays_data = ticker_data.history(period='1d')
+                # 🥷 Fetch using the new HTML scraper
+                live_price = fetch_price_stealth(ticker)
+                
+                if live_price is None:
+                    print(f"Could not extract price for {ticker}")
+                    time.sleep(1)
+                    continue
+                
+                # 🚨 BREAKOUT TRIGGER LOGIC
+                if live_price >= trigger_price:
+                    alert_msg = (
+                        f"🚨 *BREAKOUT TRIGGERED*\n\n"
+                        f"🎯 *Ticker:* {ticker}\n"
+                        f"🔥 *Live Price:* ${live_price:.2f}\n"
+                        f"📈 *Trigger Level:* ${trigger_price:.2f}\n"
+                        f"📊 *Market:* {market}"
+                    )
+                    send_telegram_alert(alert_msg)
+                    print(f"Triggered: {ticker} at {live_price}")
                     
-                    if todays_data.empty:
-                        continue
-                    
-                    live_price = float(todays_data['Close'].iloc[-1])
-                    
-                    # 🚨 1. BREAKOUT TRIGGER LOGIC 🚨
-                    if live_price >= trigger_price:
-                        alert_msg = (
-                            f"🚨 *BREAKOUT TRIGGERED*\n\n"
-                            f"🎯 *Ticker:* {ticker}\n"
-                            f"🔥 *Live Price:* ${live_price:.2f}\n"
-                            f"📈 *Trigger Level:* ${trigger_price:.2f}\n"
-                            f"📊 *Market:* {market}"
-                        )
-                        send_telegram_alert(alert_msg)
-                        print(f"Triggered: {ticker} at {live_price}")
-                        
-                        # Delete the row so it doesn't spam you every 60 seconds
-                        supabase.table("watchlists").delete().eq("id", target.get("id")).execute()
-                    
-                    # 📊 2. SPREAD TRACKING LOGIC (For targets not yet triggered) 📊
-                    else:
-                        spread_pct = ((trigger_price - live_price) / live_price) * 100
-                        
-                        # Store as a tuple: (mathematical_value, formatted_string)
-                        row_str = f"{ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
-                        active_spreads.append((spread_pct, row_str))
+                    supabase.table("watchlists").delete().eq("id", target.get("id")).execute()
+                
+                # 📊 SPREAD TRACKING LOGIC
+                else:
+                    spread_pct = ((trigger_price - live_price) / live_price) * 100
+                    row_str = f"{ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
+                    active_spreads.append((spread_pct, row_str))
 
-                except Exception as e:
-                    print(f"Error checking {ticker}: {e}")
+                # Polite 1-second breather so we don't get HTML banned
+                time.sleep(1)
 
-                # 🛑 RATE LIMIT BREATHER: Rest for 1.5 seconds between each stock
-                time.sleep(1.5)
-
-            # 🕒 3. HALF-HOURLY SPREAD REPORT 🕒
+            # 🕒 HALF-HOURLY SPREAD REPORT
             current_time = time.time()
-            if current_time - last_summary_time >= 1800:  # 1800 seconds = 30 minutes
+            if current_time - last_summary_time >= 1800:
                 if active_spreads:
-                    # Sort ascending based on the numerical spread percentage
                     active_spreads.sort(key=lambda x: x[0])
-                    
-                    # Extract just the text strings for the payload
                     sorted_text_lines = [item[1] for item in active_spreads]
                     
-                    # Assemble the tabular payload inside a monospace code block
                     summary_msg = "🦅 *30-MINUTE MB RADAR* (Closest to Trigger) 🦅\n\n"
                     summary_msg += "```text\n"
                     summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
@@ -139,15 +140,13 @@ def run_bot():
         except Exception as e:
             print(f"Scanner Loop Error: {e}")
         
-        # Rest for 60 seconds before scanning the actual prices again
+        # Rest for 60 seconds
         time.sleep(60)
 
-# --- 5. EXECUTION ---
-# 1. Start the scanning engine IMMEDIATELY (Crucial for Gunicorn/Render)
+# --- 6. EXECUTION ---
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
 if __name__ == '__main__':
-    # 2. Start the dummy web server (Used for local testing, Render uses Gunicorn)
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
