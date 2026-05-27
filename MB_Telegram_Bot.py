@@ -44,7 +44,6 @@ def send_telegram_alert(message):
         print(f"Telegram Request Error: {e}")
 
 # --- 4. THE TRADINGVIEW ENGINE (Syntax Mutator) ---
-# Maps raw DB tickers to exact working TV strings (e.g., "BAJAJ-AUTO" -> "NSE:BAJAJ_AUTO")
 tv_cache = {}
 
 def fetch_price_tv(ticker, market):
@@ -54,7 +53,6 @@ def fetch_price_tv(ticker, market):
     }
     scan_url = "https://scanner.tradingview.com/global/scan"
 
-    # 1. FAST PATH: If we already found the working syntax, use it immediately
     if ticker in tv_cache:
         payload = {
             "symbols": {"tickers": [tv_cache[ticker]]},
@@ -72,19 +70,16 @@ def fetch_price_tv(ticker, market):
             pass
         return None
 
-    # 2. RESOLUTION PATH: Determine which exchanges to attack
     if market and "india" in market.lower():
         exchanges_to_try = ["NSE", "BSE"]
     else:
         exchanges_to_try = ["NASDAQ", "NYSE", "AMEX"]
 
-    # 3. SYNTAX MUTATION: TV replaces special chars with underscores
     mutations = [ticker]
     mutated_ticker = ticker.replace("-", "_").replace("&", "_")
     if mutated_ticker != ticker:
         mutations.append(mutated_ticker)
 
-    # 4. BRUTE-FORCE LOOP: Try every exchange with every syntax mutation
     for exchange in exchanges_to_try:
         for mut in mutations:
             full_tv_ticker = f"{exchange}:{mut}"
@@ -101,7 +96,6 @@ def fetch_price_tv(ticker, market):
                     if data.get("data") and len(data["data"]) > 0:
                         price_array = data["data"][0].get("d", [])
                         if price_array and len(price_array) > 0:
-                            # Success! Cache the EXACT working string for the next loop
                             tv_cache[ticker] = full_tv_ticker
                             return float(price_array[0])
             except Exception:
@@ -111,7 +105,7 @@ def fetch_price_tv(ticker, market):
 
 # --- 5. THE CORE SCANNER ENGINE ---
 def run_bot():
-    print("🦅 Cloud Telegram Engine Active. Scanning via Mutating TV Protocol...")
+    print("🦅 Cloud Telegram Engine Active. Scanning via Market Segregation Protocol...")
     
     last_summary_time = 0 
     
@@ -123,15 +117,20 @@ def run_bot():
 
             response = supabase.table("watchlists").select("*").execute()
             targets = response.data
-            active_spreads = []
+            
+            # Group spreads dynamically by market
+            grouped_spreads = {}
 
             for target in targets:
                 original_ticker = target.get("ticker", "").strip().upper()
                 trigger_price = float(target.get("trigger_price", 0))
-                market = target.get("market", "Unknown")
+                market = target.get("market", "UNKNOWN").strip().upper()
                 
                 if not original_ticker or not trigger_price:
                     continue
+                    
+                if market not in grouped_spreads:
+                    grouped_spreads[market] = []
 
                 live_price = fetch_price_tv(original_ticker, market)
                 
@@ -158,31 +157,38 @@ def run_bot():
                 else:
                     spread_pct = ((trigger_price - live_price) / live_price) * 100
                     row_str = f"{original_ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
-                    active_spreads.append((spread_pct, row_str))
+                    grouped_spreads[market].append((spread_pct, row_str))
 
                 # Polite 1-second breather
                 time.sleep(1)
 
-            # 🕒 HALF-HOURLY SPREAD REPORT
+            # 🕒 HALF-HOURLY SPREAD REPORT (Segregated by Market)
             current_time = time.time()
             if current_time - last_summary_time >= 1800:
-                if active_spreads:
-                    active_spreads.sort(key=lambda x: x[0])
-                    sorted_text_lines = [item[1] for item in active_spreads]
-                    
-                    chunk_size = 40
-                    for i in range(0, len(sorted_text_lines), chunk_size):
-                        chunk = sorted_text_lines[i:i + chunk_size]
+                for market_name, active_spreads in grouped_spreads.items():
+                    if active_spreads:
+                        active_spreads.sort(key=lambda x: x[0])
+                        sorted_text_lines = [item[1] for item in active_spreads]
                         
-                        summary_msg = f"🦅 <b>30-MINUTE MB RADAR (Part {i//chunk_size + 1})</b> 🦅\n\n"
-                        summary_msg += "<pre>\n"
-                        summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
-                        summary_msg += "-" * 37 + "\n"
-                        summary_msg += "\n".join(chunk)
-                        summary_msg += "\n</pre>"
-                        
-                        send_telegram_alert(summary_msg)
-                        time.sleep(1)
+                        chunk_size = 40
+                        for i in range(0, len(sorted_text_lines), chunk_size):
+                            chunk = sorted_text_lines[i:i + chunk_size]
+                            
+                            # Adjust title slightly if there are multiple parts for a single market
+                            if len(sorted_text_lines) > chunk_size:
+                                title_str = f"🦅 <b>30-MINUTE MB RADAR ({market_name} - Part {i//chunk_size + 1})</b> 🦅\n\n"
+                            else:
+                                title_str = f"🦅 <b>30-MINUTE MB RADAR ({market_name})</b> 🦅\n\n"
+
+                            summary_msg = title_str
+                            summary_msg += "<pre>\n"
+                            summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
+                            summary_msg += "-" * 37 + "\n"
+                            summary_msg += "\n".join(chunk)
+                            summary_msg += "\n</pre>"
+                            
+                            send_telegram_alert(summary_msg)
+                            time.sleep(1.5)
                 
                 last_summary_time = current_time
 
