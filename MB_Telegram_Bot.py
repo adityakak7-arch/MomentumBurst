@@ -1,4 +1,4 @@
-import os
+kimport os
 import time
 import threading
 import requests
@@ -25,22 +25,25 @@ else:
     supabase = None
     print("⚠️ CRITICAL: Supabase credentials missing from environment.")
 
-# --- 3. TELEGRAM ALERT FUNCTION ---
+# --- 3. TELEGRAM ALERT FUNCTION (Upgraded to HTML & Error Logging) ---
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print(f"Mock Alert: \n{message}")
         return
     
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown"
+        "parse_mode": "HTML" # Shifted from fragile Markdown to HTML
     }
     try:
-        requests.post(url, json=payload)
+        res = requests.post(url, json=payload)
+        # Diagnostic Patch: Print the exact reason if Telegram rejects the ping
+        if res.status_code != 200:
+            print(f"🚨 Telegram API Rejection: {res.status_code} - {res.text}")
     except Exception as e:
-        print(f"Telegram API Error: {e}")
+        print(f"Telegram Request Error: {e}")
 
 # --- 4. THE SHADOW SCRAPER (Bypasses Cloudflare HTML Shields) ---
 def fetch_price_stealth(ticker):
@@ -51,7 +54,7 @@ def fetch_price_stealth(ticker):
     
     # Strategy A: Silent ping to Yahoo's raw data backend
     try:
-        api_url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
+        api_url = f"[https://query2.finance.yahoo.com/v8/finance/chart/](https://query2.finance.yahoo.com/v8/finance/chart/){ticker}?interval=1m&range=1d"
         res = requests.get(api_url, headers=headers, timeout=5)
         if res.status_code == 200:
             data = res.json()
@@ -63,7 +66,7 @@ def fetch_price_stealth(ticker):
 
     # Strategy B: Deep regex on embedded HTML JSON payloads
     try:
-        html_url = f"https://finance.yahoo.com/quote/{ticker}"
+        html_url = f"[https://finance.yahoo.com/quote/](https://finance.yahoo.com/quote/){ticker}"
         res = requests.get(html_url, headers=headers, timeout=5)
         
         match = re.search(r'"currentPrice"\s*:\s*\{"raw"\s*:\s*([\d\.]+)', res.text)
@@ -80,6 +83,7 @@ def fetch_price_stealth(ticker):
 def run_bot():
     print("🦅 Cloud Telegram Engine Active. Scanning via Shadow Protocol...")
     
+    # Set to 0 so the very first summary fires immediately on boot
     last_summary_time = 0 
     
     while True:
@@ -113,14 +117,14 @@ def run_bot():
                     time.sleep(1)
                     continue
                 
-                # 🚨 BREAKOUT TRIGGER LOGIC
+                # 🚨 BREAKOUT TRIGGER LOGIC (HTML Format)
                 if live_price >= trigger_price:
                     alert_msg = (
-                        f"🚨 *BREAKOUT TRIGGERED*\n\n"
-                        f"🎯 *Ticker:* {original_ticker}\n"
-                        f"🔥 *Live Price:* ${live_price:.2f}\n"
-                        f"📈 *Trigger Level:* ${trigger_price:.2f}\n"
-                        f"📊 *Market:* {market}"
+                        f"🚨 <b>BREAKOUT TRIGGERED</b>\n\n"
+                        f"🎯 <b>Ticker:</b> {original_ticker}\n"
+                        f"🔥 <b>Live Price:</b> ${live_price:.2f}\n"
+                        f"📈 <b>Trigger Level:</b> ${trigger_price:.2f}\n"
+                        f"📊 <b>Market:</b> {market}"
                     )
                     send_telegram_alert(alert_msg)
                     print(f"Triggered: {original_ticker} at {live_price}")
@@ -136,19 +140,20 @@ def run_bot():
                 # Polite 1-second breather
                 time.sleep(1)
 
-            # 🕒 HALF-HOURLY SPREAD REPORT
+            # 🕒 HALF-HOURLY SPREAD REPORT (HTML Format)
             current_time = time.time()
             if current_time - last_summary_time >= 1800:
                 if active_spreads:
                     active_spreads.sort(key=lambda x: x[0])
                     sorted_text_lines = [item[1] for item in active_spreads]
                     
-                    summary_msg = "🦅 *30-MINUTE MB RADAR* (Closest to Trigger) 🦅\n\n"
-                    summary_msg += "```text\n"
+                    # Using HTML <pre> to force an indestructible monospace table
+                    summary_msg = "🦅 <b>30-MINUTE MB RADAR</b> (Closest to Trigger) 🦅\n\n"
+                    summary_msg += "<pre>\n"
                     summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
                     summary_msg += "-" * 37 + "\n"
                     summary_msg += "\n".join(sorted_text_lines)
-                    summary_msg += "\n```"
+                    summary_msg += "\n</pre>"
                     
                     send_telegram_alert(summary_msg)
                 
