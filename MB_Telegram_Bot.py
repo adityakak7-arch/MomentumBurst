@@ -43,6 +43,12 @@ def send_telegram_alert(message):
         print(f"Telegram API Error: {e}")
 
 # --- 4. THE CORE SCANNER ENGINE ---
+# 🥷 STEALTH PROTOCOL: Trick Yahoo Finance into thinking this server is a Mac browser
+yf_session = requests.Session()
+yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
+
 def run_bot():
     print("🦅 Cloud Telegram Engine Active. Scanning...")
     
@@ -70,8 +76,8 @@ def run_bot():
                     continue
 
                 try:
-                    # Fetch live price from Yahoo Finance
-                    ticker_data = yf.Ticker(ticker)
+                    # Fetch live price using the stealth session
+                    ticker_data = yf.Ticker(ticker, session=yf_session)
                     todays_data = ticker_data.history(period='1d')
                     
                     if todays_data.empty:
@@ -99,12 +105,14 @@ def run_bot():
                         spread_pct = ((trigger_price - live_price) / live_price) * 100
                         
                         # Store as a tuple: (mathematical_value, formatted_string)
-                        # The fixed widths (<8, <7) guarantee perfect table alignment
                         row_str = f"{ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
                         active_spreads.append((spread_pct, row_str))
 
                 except Exception as e:
                     print(f"Error checking {ticker}: {e}")
+
+                # 🛑 RATE LIMIT BREATHER: Rest for 1.5 seconds between each stock
+                time.sleep(1.5)
 
             # 🕒 3. HALF-HOURLY SPREAD REPORT 🕒
             current_time = time.time()
