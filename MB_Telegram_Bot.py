@@ -43,8 +43,7 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"Telegram Request Error: {e}")
 
-# --- 4. THE TRADINGVIEW ENGINE (Bypasses Yahoo IP Bans) ---
-# Global cache maps raw tickers to exact TV exchanges (e.g., "PAGEIND" -> "NSE:PAGEIND")
+# --- 4. THE TRADINGVIEW ENGINE (Bypasses IP Bans) ---
 tv_cache = {}
 
 def fetch_price_tv(ticker, market):
@@ -52,14 +51,13 @@ def fetch_price_tv(ticker, market):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
     
-    # Map database market string to TV country code for accurate search resolution
     country = ""
     if market and "india" in market.lower():
         country = "IN"
     elif market and "us" in market.lower():
         country = "US"
 
-    # 1. Resolve Exact Exchange (Hit once per stock, then cached)
+    # 1. Resolve Exact Exchange
     if ticker not in tv_cache:
         search_url = f"https://symbol-search.tradingview.com/symbol_search/v3/?text={ticker}&hl=1&type=stock"
         if country:
@@ -82,7 +80,7 @@ def fetch_price_tv(ticker, market):
     if not full_tv_ticker:
         return None
 
-    # 2. Fetch Live Price via Global Scanner
+    # 2. Fetch Live Price
     scan_url = "https://scanner.tradingview.com/global/scan"
     payload = {
         "symbols": {"tickers": [full_tv_ticker]},
@@ -124,7 +122,6 @@ def run_bot():
                 if not original_ticker or not trigger_price:
                     continue
 
-                # 🥷 Fetch using TradingView Engine
                 live_price = fetch_price_tv(original_ticker, market)
                 
                 if live_price is None:
@@ -152,24 +149,31 @@ def run_bot():
                     row_str = f"{original_ticker:<8} | {live_price:<7.2f} | {trigger_price:<7.2f} | {spread_pct:>5.1f}%"
                     active_spreads.append((spread_pct, row_str))
 
-                # Polite 1-second breather
                 time.sleep(1)
 
-            # 🕒 HALF-HOURLY SPREAD REPORT
+            # 🕒 HALF-HOURLY SPREAD REPORT (Chunked for Payload Limits)
             current_time = time.time()
             if current_time - last_summary_time >= 1800:
                 if active_spreads:
                     active_spreads.sort(key=lambda x: x[0])
                     sorted_text_lines = [item[1] for item in active_spreads]
                     
-                    summary_msg = "🦅 <b>30-MINUTE MB RADAR</b> (Closest to Trigger) 🦅\n\n"
-                    summary_msg += "<pre>\n"
-                    summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
-                    summary_msg += "-" * 37 + "\n"
-                    summary_msg += "\n".join(sorted_text_lines)
-                    summary_msg += "\n</pre>"
-                    
-                    send_telegram_alert(summary_msg)
+                    # Telegram limit is 4096 chars. Slice the array into chunks of 40 stocks.
+                    chunk_size = 40
+                    for i in range(0, len(sorted_text_lines), chunk_size):
+                        chunk = sorted_text_lines[i:i + chunk_size]
+                        
+                        summary_msg = f"🦅 <b>30-MINUTE MB RADAR (Part {i//chunk_size + 1})</b> 🦅\n\n"
+                        summary_msg += "<pre>\n"
+                        summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
+                        summary_msg += "-" * 37 + "\n"
+                        summary_msg += "\n".join(chunk)
+                        summary_msg += "\n</pre>"
+                        
+                        send_telegram_alert(summary_msg)
+                        
+                        # Polite 1-second delay so Telegram doesn't flag us for spamming messages
+                        time.sleep(1)
                 
                 last_summary_time = current_time
 
