@@ -3,6 +3,7 @@ import time
 import threading
 import requests
 import re
+import urllib.parse
 from supabase import create_client, Client
 from flask import Flask
 
@@ -25,37 +26,47 @@ else:
     supabase = None
     print("⚠️ CRITICAL: Supabase credentials missing from environment.")
 
-# --- 3. TELEGRAM ALERT FUNCTION (Upgraded to HTML & Error Logging) ---
+# --- 3. TELEGRAM ALERT FUNCTION (HTML Parser) ---
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print(f"Mock Alert: \n{message}")
         return
     
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "HTML" # Shifted from fragile Markdown to HTML
+        "parse_mode": "HTML"
     }
     try:
         res = requests.post(url, json=payload)
-        # Diagnostic Patch: Print the exact reason if Telegram rejects the ping
         if res.status_code != 200:
             print(f"🚨 Telegram API Rejection: {res.status_code} - {res.text}")
     except Exception as e:
         print(f"Telegram Request Error: {e}")
 
-# --- 4. THE SHADOW SCRAPER (Bypasses Cloudflare HTML Shields) ---
+# --- 4. THE MULTI-NODE SCRAPER (Bypasses Cloudflare & IP Bans) ---
 def fetch_price_stealth(ticker):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
     
-    # Strategy A: Silent ping to Yahoo's raw data backend
+    # Strategy A: Yahoo V7 Spark API (Undocumented, lower security)
     try:
-        api_url = f"[https://query2.finance.yahoo.com/v8/finance/chart/](https://query2.finance.yahoo.com/v8/finance/chart/){ticker}?interval=1m&range=1d"
-        res = requests.get(api_url, headers=headers, timeout=5)
+        url = f"https://query1.finance.yahoo.com/v7/finance/spark?symbols={ticker}&range=1d&interval=1m"
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            price = data.get("spark", {}).get("result", [{}])[0].get("response", [{}])[0].get("meta", {}).get("regularMarketPrice")
+            if price: return float(price)
+    except Exception:
+        pass
+
+    # Strategy B: Route through AllOrigins Proxy (Bypasses Render IP Ban entirely)
+    try:
+        target_url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
+        proxy_url = f"https://api.allorigins.win/raw?url={urllib.parse.quote(target_url)}"
+        res = requests.get(proxy_url, timeout=7)
         if res.status_code == 200:
             data = res.json()
             meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
@@ -63,27 +74,13 @@ def fetch_price_stealth(ticker):
             if price: return float(price)
     except Exception:
         pass
-
-    # Strategy B: Deep regex on embedded HTML JSON payloads
-    try:
-        html_url = f"[https://finance.yahoo.com/quote/](https://finance.yahoo.com/quote/){ticker}"
-        res = requests.get(html_url, headers=headers, timeout=5)
-        
-        match = re.search(r'"currentPrice"\s*:\s*\{"raw"\s*:\s*([\d\.]+)', res.text)
-        if match: return float(match.group(1))
-        
-        match2 = re.search(f'data-symbol="{ticker}"[^>]*data-field="regularMarketPrice"[^>]*value="([^"]+)"', res.text, re.IGNORECASE)
-        if match2: return float(match2.group(1))
-    except Exception:
-        pass
         
     return None
 
 # --- 5. THE CORE SCANNER ENGINE ---
 def run_bot():
-    print("🦅 Cloud Telegram Engine Active. Scanning via Shadow Protocol...")
+    print("🦅 Cloud Telegram Engine Active. Scanning via Multi-Node Proxy...")
     
-    # Set to 0 so the very first summary fires immediately on boot
     last_summary_time = 0 
     
     while True:
@@ -104,20 +101,19 @@ def run_bot():
                 if not original_ticker or not trigger_price:
                     continue
 
-                # Auto-correct Indian tickers for Yahoo Finance backend
-                fetch_ticker = original_ticker
-                if market.lower() == "india" and not fetch_ticker.endswith(".NS") and not fetch_ticker.endswith(".BO"):
-                    fetch_ticker += ".NS"
-
-                # 🥷 Fetch using the shadow scraper
-                live_price = fetch_price_stealth(fetch_ticker)
+                # 🥷 1. Attempt primary fetch
+                live_price = fetch_price_stealth(original_ticker)
+                
+                # 🥷 2. Dynamic Auto-Correction for Indian Stocks
+                if live_price is None and not original_ticker.endswith(".NS") and not original_ticker.endswith(".BO"):
+                    live_price = fetch_price_stealth(f"{original_ticker}.NS")
                 
                 if live_price is None:
                     print(f"Could not extract price for {original_ticker}")
                     time.sleep(1)
                     continue
                 
-                # 🚨 BREAKOUT TRIGGER LOGIC (HTML Format)
+                # 🚨 BREAKOUT TRIGGER LOGIC
                 if live_price >= trigger_price:
                     alert_msg = (
                         f"🚨 <b>BREAKOUT TRIGGERED</b>\n\n"
@@ -140,14 +136,13 @@ def run_bot():
                 # Polite 1-second breather
                 time.sleep(1)
 
-            # 🕒 HALF-HOURLY SPREAD REPORT (HTML Format)
+            # 🕒 HALF-HOURLY SPREAD REPORT
             current_time = time.time()
             if current_time - last_summary_time >= 1800:
                 if active_spreads:
                     active_spreads.sort(key=lambda x: x[0])
                     sorted_text_lines = [item[1] for item in active_spreads]
                     
-                    # Using HTML <pre> to force an indestructible monospace table
                     summary_msg = "🦅 <b>30-MINUTE MB RADAR</b> (Closest to Trigger) 🦅\n\n"
                     summary_msg += "<pre>\n"
                     summary_msg += f"{'TICKER':<8} | {'LIVE':<7} | {'TRIG':<7} | {'SPRD'}\n"
